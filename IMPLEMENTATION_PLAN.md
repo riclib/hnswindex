@@ -34,9 +34,9 @@ Building a semantic document indexing package with HNSW vector search and Ollama
 - [x] 1. Create go.mod with dependencies
 - [x] 2. Implement core types and config (with tests)
 - [x] 3. Implement embedder interface and Ollama client (with tests)
-- [ ] 4. Implement tiktoken-based chunker (with tests)
-- [ ] 5. Implement bbolt storage layer (with tests)
-- [ ] 6. Implement HNSW index management (with tests)
+- [x] 4. Implement tiktoken-based chunker (with tests)
+- [x] 5. Implement bbolt storage layer (with tests)
+- [x] 6. Implement HNSW index management (with tests)
 
 ### Phase 2: Index Operations
 - [ ] 7. Implement IndexManager with viper config (with tests)
@@ -71,6 +71,7 @@ Building a semantic document indexing package with HNSW vector search and Ollama
 ## Progress Log
 - **2024-01-04 15:30**: Project initialized, planning phase complete
 - **2024-01-04 16:00**: Completed core types, embedder interface, and tiktoken chunker with TDD
+- **2024-01-04 16:30**: Completed storage layer and HNSW index management with full test coverage
 
 ## Current Status
-🟡 **Phase 1 in Progress**: Implementing storage layer and HNSW index management
+🟡 **Phase 2 Starting**: Wiring up IndexManager with full integration
