@@ -3,7 +3,6 @@ package hnswindex
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
 	"sync"
 
 	"github.com/spf13/viper"
@@ -83,10 +82,12 @@ type IndexStats struct {
 
 // IndexManager manages multiple indexes
 type IndexManager struct {
-	config  *Config
-	db      *bbolt.DB
-	indexes map[string]*Index
-	mu      sync.RWMutex
+	config   *Config
+	db       *bbolt.DB
+	indexes  map[string]*Index
+	mu       sync.RWMutex
+	embedder interface{} // Embedder interface
+	impl     interface{} // Implementation reference
 }
 
 // Index represents a single document index
@@ -102,41 +103,8 @@ func NewIndexManager(config *Config) (*IndexManager, error) {
 		return nil, errors.New("data path cannot be empty")
 	}
 
-	// Create data directory if it doesn't exist
-	dbPath := filepath.Join(config.DataPath, "indexes.db")
-	db, err := bbolt.Open(dbPath, 0644, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open database: %w", err)
-	}
-
-	// Initialize global buckets
-	err = db.Update(func(tx *bbolt.Tx) error {
-		_, err := tx.CreateBucketIfNotExists([]byte("_indexes"))
-		if err != nil {
-			return err
-		}
-		_, err = tx.CreateBucketIfNotExists([]byte("_config"))
-		return err
-	})
-	if err != nil {
-		db.Close()
-		return nil, fmt.Errorf("failed to initialize database: %w", err)
-	}
-
-	manager := &IndexManager{
-		config:  config,
-		db:      db,
-		indexes: make(map[string]*Index),
-	}
-
-	// Load existing indexes
-	err = manager.loadIndexes()
-	if err != nil {
-		db.Close()
-		return nil, fmt.Errorf("failed to load indexes: %w", err)
-	}
-
-	return manager, nil
+	// Use the full implementation
+	return NewIndexManagerImpl(config)
 }
 
 // GetIndex retrieves an existing index
@@ -153,31 +121,11 @@ func (im *IndexManager) GetIndex(name string) (*Index, error) {
 
 // CreateIndex creates a new index
 func (im *IndexManager) CreateIndex(name string) (*Index, error) {
-	im.mu.Lock()
-	defer im.mu.Unlock()
-
-	// Check if index already exists
-	if _, exists := im.indexes[name]; exists {
-		return nil, fmt.Errorf("index '%s' already exists", name)
+	if impl := im.getImpl(); impl != nil {
+		return impl.CreateIndex(name)
 	}
-
-	// Create index in database
-	err := im.db.Update(func(tx *bbolt.Tx) error {
-		bucket := tx.Bucket([]byte("_indexes"))
-		return bucket.Put([]byte(name), []byte("active"))
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create index: %w", err)
-	}
-
-	// Create index instance
-	index := &Index{
-		name:    name,
-		manager: im,
-	}
-	im.indexes[name] = index
-
-	return index, nil
+	
+	return nil, fmt.Errorf("implementation not available")
 }
 
 // DeleteIndex deletes an index
@@ -252,41 +200,53 @@ func (i *Index) Name() string {
 
 // AddDocumentBatch adds multiple documents to the index
 func (i *Index) AddDocumentBatch(docs []Document) (*BatchResult, error) {
-	// TODO: Implement batch document processing
+	if impl := i.getImpl(); impl != nil {
+		return impl.AddDocumentBatch(docs)
+	}
 	return &BatchResult{
 		TotalDocuments: len(docs),
 		FailedURIs:     make(map[string]string),
-	}, nil
+	}, fmt.Errorf("implementation not available")
 }
 
 // Search performs a semantic search on the index
 func (i *Index) Search(query string, limit int) ([]SearchResult, error) {
-	// TODO: Implement search functionality
-	return []SearchResult{}, nil
+	if impl := i.getImpl(); impl != nil {
+		return impl.Search(query, limit)
+	}
+	return []SearchResult{}, fmt.Errorf("implementation not available")
 }
 
 // GetDocument retrieves a document by URI
 func (i *Index) GetDocument(uri string) (*Document, error) {
-	// TODO: Implement document retrieval
-	return nil, fmt.Errorf("not implemented")
+	if impl := i.getImpl(); impl != nil {
+		return impl.GetDocument(uri)
+	}
+	return nil, fmt.Errorf("implementation not available")
 }
 
 // DeleteDocument deletes a document from the index
 func (i *Index) DeleteDocument(uri string) error {
-	// TODO: Implement document deletion
-	return fmt.Errorf("not implemented")
+	if impl := i.getImpl(); impl != nil {
+		return impl.DeleteDocument(uri)
+	}
+	return fmt.Errorf("implementation not available")
 }
 
 // Stats returns statistics for the index
 func (i *Index) Stats() (IndexStats, error) {
-	// TODO: Implement statistics
+	if impl := i.getImpl(); impl != nil {
+		return impl.Stats()
+	}
 	return IndexStats{
 		Name: i.name,
-	}, nil
+	}, fmt.Errorf("implementation not available")
 }
 
 // Clear removes all documents from the index
 func (i *Index) Clear() error {
-	// TODO: Implement index clearing
-	return fmt.Errorf("not implemented")
+	if impl := i.getImpl(); impl != nil {
+		return impl.Clear()
+	}
+	return fmt.Errorf("implementation not available")
 }
