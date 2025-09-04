@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -482,6 +483,14 @@ func (s *Storage) GetIndexMetadata(indexName string) (*IndexMetadata, error) {
 
 // SetIndexMetadata updates metadata for an index
 func (s *Storage) SetIndexMetadata(indexName string, metadata IndexMetadata) error {
+	slog.Debug("Updating index metadata",
+		"index", indexName,
+		"document_count", metadata.DocumentCount,
+		"chunk_count", metadata.ChunkCount,
+		"next_hnsw_id", metadata.NextHNSWId,
+		"last_updated", metadata.LastUpdated,
+	)
+	
 	return s.db.Update(func(tx *bbolt.Tx) error {
 		metadataBucket := tx.Bucket([]byte(fmt.Sprintf("%s_metadata", indexName)))
 		if metadataBucket == nil {

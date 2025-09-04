@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,6 +19,8 @@ var (
 	dataPath  string
 	indexName string
 	verbose   bool
+	debug     bool
+	logLevel  string
 )
 
 var rootCmd = &cobra.Command{
@@ -60,6 +63,8 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is ./config.yaml)")
 	rootCmd.PersistentFlags().StringVar(&dataPath, "data", "./hnswdata", "data directory path")
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose output")
+	rootCmd.PersistentFlags().BoolVar(&debug, "debug", false, "enable debug logging")
+	rootCmd.PersistentFlags().StringVar(&logLevel, "log-level", "info", "log level (debug, info, warn, error)")
 
 	// Index command flags
 	indexCmd.Flags().StringVarP(&indexName, "index", "i", "default", "index name")
@@ -107,6 +112,9 @@ func initConfig() {
 	if err := viper.ReadInConfig(); err == nil && verbose {
 		fmt.Println("Using config file:", viper.ConfigFileUsed())
 	}
+
+	// Configure logging
+	configureLogging()
 }
 
 func runIndex(cmd *cobra.Command, args []string) error {
@@ -343,6 +351,50 @@ func showIndexStats(manager *hnswindex.IndexManager, name string) error {
 	}
 
 	return nil
+}
+
+func configureLogging() {
+	var level slog.Level
+
+	// Debug flag overrides log-level
+	if debug {
+		level = slog.LevelDebug
+	} else {
+		switch strings.ToLower(logLevel) {
+		case "debug":
+			level = slog.LevelDebug
+		case "info":
+			level = slog.LevelInfo
+		case "warn", "warning":
+			level = slog.LevelWarn
+		case "error":
+			level = slog.LevelError
+		default:
+			level = slog.LevelInfo
+		}
+	}
+
+	// Create a text handler with the specified level
+	opts := &slog.HandlerOptions{
+		Level: level,
+	}
+
+	// If verbose or debug, include source information
+	if verbose || debug {
+		opts.AddSource = true
+	}
+
+	handler := slog.NewTextHandler(os.Stderr, opts)
+	logger := slog.New(handler)
+	slog.SetDefault(logger)
+
+	if verbose || debug {
+		slog.Info("Logging configured",
+			"level", level.String(),
+			"debug", debug,
+			"verbose", verbose,
+		)
+	}
 }
 
 func main() {

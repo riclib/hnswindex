@@ -6,11 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is a Go package for semantic document indexing and retrieval using:
 - **HNSW (Hierarchical Navigable Small World)** graphs for vector similarity search
-- **Ollama** for local embeddings generation
-- **bbolt** for persistent storage
-- **templ** for type-safe HTML templates (demo app)
+- **Ollama** for local embeddings generation (nomic-embed-text model)
+- **BBolt** for persistent storage
+- **Tiktoken-go** for GPT-4 compatible tokenization (cl100k_base)
+- **Viper** for configuration management with namespace support
+- **slog** for structured logging and debugging
 
-The package supports multiple independent indexes with efficient batch processing and change detection.
+The package supports multiple independent indexes with efficient batch processing, change detection, and concurrent processing with configurable worker pools.
 
 ## Development Commands
 
@@ -27,6 +29,8 @@ go test -v ./...                    # Verbose output
 go test ./internal/chunker -v       # Test specific package
 go test -run TestSpecificFunc ./... # Run specific test
 go test -bench=. ./...              # Run benchmarks
+go test -race ./...                 # Race detection
+go test -cover ./...                # Coverage report
 ```
 
 ### Linting & Formatting
@@ -46,22 +50,32 @@ go mod verify
 
 ### Running the Demo Application
 ```bash
-# Set environment variables for Confluence integration
-export CONF_TOKEN=your_confluence_token
-export CONF_URL=https://company.atlassian.net
+# Build the demo CLI
+cd cmd/demo
+go build -o demo
 
-# Run the demo
-go run ./cmd/demo [command] [flags]
+# Index markdown files
+./demo index --dir ./docs --index mydocs
+
+# Search with different log levels
+./demo search "query" --index mydocs --limit 5
+./demo --debug search "query" --index mydocs      # Debug logging
+./demo --log-level warn search "query"            # Warning level
+
+# View statistics
+./demo stats --index mydocs
+./demo list
 ```
 
 ## Architecture
 
 ### Core Library Structure
-- **hnswindex.go**: Main package interface with IndexManager and Index types
-- **internal/chunker**: Document chunking with configurable size/overlap
-- **internal/embedder**: Ollama client for generating embeddings
-- **internal/storage**: bbolt database operations for persistent storage
-- **internal/indexer**: HNSW graph management for vector search
+- **hnswindex.go**: Main package interface with Config, IndexManager, Index types
+- **index.go**: Full integration implementation connecting all components
+- **internal/chunker**: Tiktoken-based document chunking with overlap (cl100k_base encoding)
+- **internal/embedder**: Ollama client for generating embeddings with batch support
+- **internal/storage**: BBolt database operations for documents, chunks, and metadata
+- **internal/indexer**: HNSW graph management with cosine similarity search
 
 ### Storage Design
 - **bbolt database**: Stores documents, chunks, embeddings, and metadata
@@ -109,19 +123,62 @@ go run ./cmd/demo [command] [flags]
 
 ## Common Tasks
 
-### Create a New Index Type
-1. Define the index in IndexManager
-2. Add bucket schema in storage/bbolt.go
-3. Implement HNSW graph initialization in indexer/hnsw.go
-4. Add corresponding CLI command in cmd/demo/commands/
+### Debug Issues
+```bash
+# Enable comprehensive debug logging
+./demo --debug index --dir ./docs --index test
 
-### Add Document Source
-1. Create client in cmd/demo/[source]/
-2. Implement document fetching and conversion
-3. Add command in cmd/demo/commands/
-4. Convert to hnswindex.Document format
+# Check specific components
+./demo --debug search "test" | grep -i embedding  # Embedding issues
+./demo --debug search "test" | grep -i chunk      # Chunking issues
+./demo --debug search "test" | grep -i hnsw       # HNSW issues
+```
 
-### Modify Chunking Strategy
-1. Update internal/chunker/chunker.go
-2. Adjust Config defaults in hnswindex.go
-3. Update tests for new chunking behavior
+### Fix HNSW Loading Issues
+The HNSW index requires `io.ByteReader` for importing. Fix implemented:
+```go
+// Wrap file with bufio.Reader
+reader := bufio.NewReader(file)
+if err := h.graph.Import(reader); err != nil {
+    return fmt.Errorf("failed to import graph: %w", err)
+}
+```
+
+### Configuration with Viper
+```go
+// Use with namespace
+v := viper.New()
+v.SetDefault("hnsw.chunk_size", 512)
+v.SetDefault("hnsw.max_workers", 8)
+config := hnswindex.NewConfigFromViper(v, "hnsw")
+```
+
+### Monitor Performance
+Key metrics to watch in logs:
+- `duration_ms` fields for operation timing
+- `chunks_created` for document processing
+- `dimension` for embedding validation
+- `index_size` for HNSW graph growth
+
+## Recent Changes (2025-09-04)
+
+### Added Comprehensive Logging
+- All components now use `log/slog` for structured logging
+- Debug level shows detailed operation tracking
+- Info level shows high-level operations
+- CLI supports `--debug` and `--log-level` flags
+
+### Fixed HNSW Loading Bug
+- Resolved "ByteReader" error when loading saved indexes
+- Wrapped file operations with `bufio.Reader`
+- Indexes now persist and load correctly between sessions
+
+### Configuration Updates
+- Added Viper support with namespace configuration
+- Environment variable support with HNSW_ prefix
+- Configurable worker pools for concurrent processing
+
+### Testing Improvements
+- Added 51 passing tests covering all components
+- TDD approach maintained throughout development
+- Race condition testing enabled

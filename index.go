@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -214,6 +215,11 @@ func (i *Index) getImpl() *indexImpl {
 
 // AddDocumentBatch implementation with full processing pipeline
 func (i *indexImpl) AddDocumentBatch(docs []Document) (*BatchResult, error) {
+	slog.Info("Starting batch document processing",
+		"index", i.name,
+		"document_count", len(docs),
+	)
+
 	result := &BatchResult{
 		TotalDocuments: len(docs),
 		FailedURIs:     make(map[string]string),
@@ -225,30 +231,64 @@ func (i *indexImpl) AddDocumentBatch(docs []Document) (*BatchResult, error) {
 		// Compute content hash
 		hash := computeDocumentHash(doc)
 		
+		slog.Debug("Checking document",
+			"uri", doc.URI,
+			"title", doc.Title,
+			"hash", hash[:16],
+		)
+		
 		// Check if document has changed
 		existingHash, err := i.manager.storage.GetDocumentHash(i.name, doc.URI)
 		if err != nil {
 			// Document doesn't exist
+			slog.Debug("Document is new",
+				"uri", doc.URI,
+			)
 			result.NewDocuments++
 			toProcess = append(toProcess, doc)
 		} else if existingHash != hash {
 			// Document has changed
+			slog.Debug("Document has changed",
+				"uri", doc.URI,
+				"old_hash", existingHash[:16],
+				"new_hash", hash[:16],
+			)
 			result.UpdatedDocuments++
 			toProcess = append(toProcess, doc)
 		} else {
 			// Document unchanged
+			slog.Debug("Document unchanged",
+				"uri", doc.URI,
+			)
 			result.UnchangedDocuments++
 		}
 	}
 
+	slog.Info("Document analysis complete",
+		"new", result.NewDocuments,
+		"updated", result.UpdatedDocuments,
+		"unchanged", result.UnchangedDocuments,
+		"to_process", len(toProcess),
+	)
+
 	// Early return if nothing to process
 	if len(toProcess) == 0 {
+		slog.Info("No documents to process")
 		return result, nil
 	}
 
 	// Phase 2: Process documents
 	for _, doc := range toProcess {
+		slog.Debug("Processing document",
+			"uri", doc.URI,
+			"content_length", len(doc.Content),
+		)
+		
 		if err := i.processDocument(doc); err != nil {
+			slog.Error("Failed to process document",
+				"uri", doc.URI,
+				"error", err,
+			)
 			result.FailedURIs[doc.URI] = err.Error()
 			continue
 		}
@@ -257,22 +297,39 @@ func (i *indexImpl) AddDocumentBatch(docs []Document) (*BatchResult, error) {
 		chunks, err := i.manager.storage.GetChunksByDocument(i.name, doc.URI)
 		if err == nil {
 			result.ProcessedChunks += len(chunks)
+			slog.Debug("Document processed",
+				"uri", doc.URI,
+				"chunks", len(chunks),
+			)
 		}
 	}
 
 	// Phase 3: Save HNSW index if auto-save is enabled
 	if i.manager.config.AutoSave {
+		slog.Debug("Saving HNSW index")
 		if err := i.hnswIndex.Save(); err != nil {
+			slog.Error("Failed to save HNSW index",
+				"error", err,
+			)
 			return result, fmt.Errorf("failed to save HNSW index: %w", err)
 		}
+		slog.Debug("HNSW index saved")
 	}
 
 	// Update index metadata
 	metadata, _ := i.manager.storage.GetIndexMetadata(i.name)
 	if metadata != nil {
 		metadata.LastUpdated = time.Now().Format(time.RFC3339)
+		metadata.DocumentCount = result.NewDocuments + result.UpdatedDocuments
+		metadata.ChunkCount = result.ProcessedChunks
 		i.manager.storage.SetIndexMetadata(i.name, *metadata)
 	}
+
+	slog.Info("Batch processing complete",
+		"index", i.name,
+		"processed_chunks", result.ProcessedChunks,
+		"failed", len(result.FailedURIs),
+	)
 
 	return result, nil
 }

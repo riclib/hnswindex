@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"sync"
+	"time"
 
 	"github.com/ollama/ollama/api"
 )
@@ -54,6 +56,18 @@ func NewOllamaEmbedder(ollamaURL string, model string) (*OllamaEmbedder, error) 
 
 // GenerateEmbedding generates an embedding for a single text
 func (o *OllamaEmbedder) GenerateEmbedding(text string) ([]float32, error) {
+	start := time.Now()
+	textPreview := text
+	if len(textPreview) > 100 {
+		textPreview = textPreview[:100] + "..."
+	}
+	
+	slog.Debug("Generating embedding",
+		"model", o.model,
+		"text_length", len(text),
+		"text_preview", textPreview,
+	)
+	
 	ctx := context.Background()
 	
 	req := &api.EmbedRequest{
@@ -63,10 +77,17 @@ func (o *OllamaEmbedder) GenerateEmbedding(text string) ([]float32, error) {
 
 	resp, err := o.client.Embed(ctx, req)
 	if err != nil {
+		slog.Error("Failed to generate embedding",
+			"error", err,
+			"model", o.model,
+		)
 		return nil, fmt.Errorf("failed to generate embedding: %w", err)
 	}
 
 	if len(resp.Embeddings) == 0 || len(resp.Embeddings[0]) == 0 {
+		slog.Error("No embedding returned from Ollama",
+			"model", o.model,
+		)
 		return nil, errors.New("no embedding returned from Ollama")
 	}
 
@@ -76,8 +97,17 @@ func (o *OllamaEmbedder) GenerateEmbedding(text string) ([]float32, error) {
 	o.mu.Lock()
 	if o.dimension == 0 {
 		o.dimension = len(embedding)
+		slog.Info("Embedder dimension detected",
+			"dimension", o.dimension,
+			"model", o.model,
+		)
 	}
 	o.mu.Unlock()
+
+	slog.Debug("Embedding generated successfully",
+		"dimension", len(embedding),
+		"duration_ms", time.Since(start).Milliseconds(),
+	)
 
 	return embedding, nil
 }
@@ -88,6 +118,12 @@ func (o *OllamaEmbedder) GenerateEmbeddings(texts []string) ([][]float32, error)
 		return [][]float32{}, nil
 	}
 
+	start := time.Now()
+	slog.Info("Starting batch embedding generation",
+		"count", len(texts),
+		"model", o.model,
+	)
+
 	// For now, process sequentially
 	// TODO: Add concurrent processing with worker pool
 	embeddings := make([][]float32, len(texts))
@@ -95,10 +131,19 @@ func (o *OllamaEmbedder) GenerateEmbeddings(texts []string) ([][]float32, error)
 	for i, text := range texts {
 		embedding, err := o.GenerateEmbedding(text)
 		if err != nil {
+			slog.Error("Failed to generate embedding in batch",
+				"index", i,
+				"error", err,
+			)
 			return nil, fmt.Errorf("failed to generate embedding for text %d: %w", i, err)
 		}
 		embeddings[i] = embedding
 	}
+
+	slog.Info("Batch embedding generation completed",
+		"count", len(texts),
+		"duration_ms", time.Since(start).Milliseconds(),
+	)
 
 	return embeddings, nil
 }

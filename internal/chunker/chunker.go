@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/pkoukk/tiktoken-go"
@@ -54,13 +55,27 @@ func NewChunker(chunkSize, overlapSize int) (*Chunker, error) {
 // Chunk splits text into chunks with overlap
 func (c *Chunker) Chunk(text string) ([]Chunk, error) {
 	if text == "" {
+		slog.Debug("Empty text provided to chunker")
 		return []Chunk{}, nil
 	}
 
+	slog.Debug("Starting text chunking",
+		"text_length", len(text),
+		"chunk_size", c.chunkSize,
+		"overlap_size", c.overlapSize,
+	)
+
 	// Encode the entire text
 	tokens := c.encoder.Encode(text, nil, nil)
-	if len(tokens) <= c.chunkSize {
+	tokenCount := len(tokens)
+	
+	slog.Debug("Text tokenized",
+		"token_count", tokenCount,
+	)
+	
+	if tokenCount <= c.chunkSize {
 		// Text fits in a single chunk
+		slog.Debug("Text fits in single chunk")
 		return []Chunk{
 			{
 				ID:       generateChunkID(text, 0),
@@ -73,6 +88,11 @@ func (c *Chunker) Chunk(text string) ([]Chunk, error) {
 	chunks := []Chunk{}
 	position := 0
 	stride := c.chunkSize - c.overlapSize
+
+	slog.Debug("Chunking with stride",
+		"stride", stride,
+		"expected_chunks", (tokenCount-c.overlapSize)/stride+1,
+	)
 
 	for i := 0; i < len(tokens); i += stride {
 		end := i + c.chunkSize
@@ -90,6 +110,15 @@ func (c *Chunker) Chunk(text string) ([]Chunk, error) {
 			Position: position,
 		}
 		chunks = append(chunks, chunk)
+		
+		slog.Debug("Created chunk",
+			"position", position,
+			"token_start", i,
+			"token_end", end,
+			"chunk_length", len(chunkText),
+			"chunk_id", chunk.ID[:8],
+		)
+		
 		position++
 
 		// If we've reached the end, break
@@ -97,6 +126,12 @@ func (c *Chunker) Chunk(text string) ([]Chunk, error) {
 			break
 		}
 	}
+
+	slog.Info("Text chunked successfully",
+		"input_tokens", tokenCount,
+		"chunks_created", len(chunks),
+		"text_length", len(text),
+	)
 
 	return chunks, nil
 }

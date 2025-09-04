@@ -1,12 +1,15 @@
 package indexer
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math/rand"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/coder/hnsw"
 )
@@ -49,6 +52,14 @@ type HNSWIndex struct {
 
 // NewHNSWIndex creates a new HNSW index
 func NewHNSWIndex(path string, dimension int, config HNSWConfig) (*HNSWIndex, error) {
+	slog.Info("Creating HNSW index",
+		"path", path,
+		"dimension", dimension,
+		"M", config.M,
+		"EfSearch", config.Ef,
+		"distance_type", config.DistanceType,
+	)
+	
 	if dimension <= 0 {
 		return nil, errors.New("dimension must be positive")
 	}
@@ -83,11 +94,25 @@ func NewHNSWIndex(path string, dimension int, config HNSWConfig) (*HNSWIndex, er
 	// If path is specified and file exists, try to load it
 	if path != "" {
 		if _, err := os.Stat(path); err == nil {
+			slog.Debug("Attempting to load existing HNSW index",
+				"path", path,
+			)
 			if err := index.load(); err != nil {
 				// If loading fails, just start with empty index
 				// (file might be from different version)
+				slog.Debug("Failed to load existing index, starting fresh",
+					"error", err,
+				)
 				index.graph = graph
+			} else {
+				slog.Debug("Successfully loaded existing HNSW index",
+					"size", index.graph.Len(),
+				)
 			}
+		} else {
+			slog.Debug("No existing HNSW index file found",
+				"path", path,
+			)
 		}
 	}
 
@@ -126,9 +151,21 @@ func (h *HNSWIndex) Add(vector []float32, id uint64) error {
 			len(vector), h.dimension)
 	}
 
+	slog.Debug("Adding vector to HNSW index",
+		"id", id,
+		"dimension", len(vector),
+		"current_size", h.graph.Len(),
+	)
+
 	node := hnsw.MakeNode(id, vector)
 	h.graph.Add(node)
 	h.isModified = true
+	
+	slog.Debug("Vector added successfully",
+		"id", id,
+		"new_size", h.graph.Len(),
+	)
+	
 	return nil
 }
 
@@ -137,6 +174,12 @@ func (h *HNSWIndex) AddBatch(vectors [][]float32, ids []uint64) error {
 	if len(vectors) != len(ids) {
 		return errors.New("vectors and ids must have the same length")
 	}
+
+	start := time.Now()
+	slog.Info("Adding batch of vectors to HNSW index",
+		"count", len(vectors),
+		"current_size", h.Size(),
+	)
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -152,11 +195,25 @@ func (h *HNSWIndex) AddBatch(vectors [][]float32, ids []uint64) error {
 	
 	h.graph.Add(nodes...)
 	h.isModified = true
+	
+	slog.Info("Batch added to HNSW index successfully",
+		"count", len(nodes),
+		"new_size", h.graph.Len(),
+		"duration_ms", time.Since(start).Milliseconds(),
+	)
+	
 	return nil
 }
 
 // Search searches for nearest neighbors
 func (h *HNSWIndex) Search(query []float32, k int) ([]SearchResult, error) {
+	start := time.Now()
+	slog.Debug("Searching HNSW index",
+		"k", k,
+		"query_dimension", len(query),
+		"index_size", h.Size(),
+	)
+	
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
@@ -166,11 +223,18 @@ func (h *HNSWIndex) Search(query []float32, k int) ([]SearchResult, error) {
 	}
 
 	if h.graph.Len() == 0 {
+		slog.Debug("Index is empty, returning empty results")
 		return []SearchResult{}, nil
 	}
 
 	// Search for k nearest neighbors
 	neighbors := h.graph.Search(query, k)
+	
+	slog.Debug("HNSW search completed",
+		"neighbors_found", len(neighbors),
+		"requested_k", k,
+		"duration_ms", time.Since(start).Milliseconds(),
+	)
 	
 	results := make([]SearchResult, len(neighbors))
 	for i, n := range neighbors {
@@ -188,7 +252,19 @@ func (h *HNSWIndex) Search(query []float32, k int) ([]SearchResult, error) {
 			ID:    n.Key,
 			Score: score,
 		}
+		
+		slog.Debug("Search result",
+			"rank", i+1,
+			"id", n.Key,
+			"distance", dist,
+			"score", score,
+		)
 	}
+
+	slog.Debug("Search results prepared",
+		"count", len(results),
+		"total_duration_ms", time.Since(start).Milliseconds(),
+	)
 
 	return results, nil
 }
@@ -212,6 +288,10 @@ func (h *HNSWIndex) Size() int {
 
 // Clear removes all vectors from the index
 func (h *HNSWIndex) Clear() error {
+	slog.Info("Clearing HNSW index",
+		"current_size", h.Size(),
+	)
+	
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -234,6 +314,9 @@ func (h *HNSWIndex) Clear() error {
 	
 	h.graph = graph
 	h.isModified = true
+	
+	slog.Info("HNSW index cleared successfully")
+	
 	return nil
 }
 
@@ -242,6 +325,13 @@ func (h *HNSWIndex) Save() error {
 	if h.path == "" {
 		return errors.New("no path specified for saving")
 	}
+
+	start := time.Now()
+	slog.Info("Saving HNSW index to disk",
+		"path", h.path,
+		"size", h.Size(),
+		"modified", h.isModified,
+	)
 
 	h.mu.RLock()
 	defer h.mu.RUnlock()
@@ -257,6 +347,12 @@ func (h *HNSWIndex) Save() error {
 	}
 
 	h.isModified = false
+	
+	slog.Info("HNSW index saved successfully",
+		"path", h.path,
+		"duration_ms", time.Since(start).Milliseconds(),
+	)
+	
 	return nil
 }
 
@@ -265,6 +361,11 @@ func (h *HNSWIndex) load() error {
 	if h.path == "" {
 		return errors.New("no path specified for loading")
 	}
+	
+	start := time.Now()
+	slog.Debug("Loading HNSW index from disk",
+		"path", h.path,
+	)
 
 	file, err := os.Open(h.path)
 	if err != nil {
@@ -272,11 +373,20 @@ func (h *HNSWIndex) load() error {
 	}
 	defer file.Close()
 
-	if err := h.graph.Import(file); err != nil {
+	// Wrap with bufio.Reader to provide ByteReader interface
+	reader := bufio.NewReader(file)
+	if err := h.graph.Import(reader); err != nil {
 		return fmt.Errorf("failed to import graph: %w", err)
 	}
 
 	h.isModified = false
+	
+	slog.Debug("HNSW index loaded successfully",
+		"path", h.path,
+		"size", h.graph.Len(),
+		"duration_ms", time.Since(start).Milliseconds(),
+	)
+	
 	return nil
 }
 
