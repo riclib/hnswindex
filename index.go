@@ -1,6 +1,7 @@
 package hnswindex
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -214,7 +215,7 @@ func (i *Index) getImpl() *indexImpl {
 }
 
 // AddDocumentBatch implementation with full processing pipeline
-func (i *indexImpl) AddDocumentBatch(docs []Document) (*BatchResult, error) {
+func (i *indexImpl) AddDocumentBatch(ctx context.Context, docs []Document, progress chan<- ProgressUpdate) (*BatchResult, error) {
 	slog.Info("Starting batch document processing",
 		"index", i.name,
 		"document_count", len(docs),
@@ -224,10 +225,39 @@ func (i *indexImpl) AddDocumentBatch(docs []Document) (*BatchResult, error) {
 		TotalDocuments: len(docs),
 		FailedURIs:     make(map[string]string),
 	}
+	
+	// Helper function to send progress updates if channel is provided
+	sendProgress := func(update ProgressUpdate) {
+		if progress != nil {
+			select {
+			case progress <- update:
+			case <-ctx.Done():
+				// Context cancelled, stop sending progress
+			default:
+				// Channel is full, skip this update to avoid blocking
+			}
+		}
+	}
 
 	// Phase 1: Analyze what needs updating
 	var toProcess []Document
-	for _, doc := range docs {
+	for idx, doc := range docs {
+		// Check for cancellation
+		select {
+		case <-ctx.Done():
+			return result, ctx.Err()
+		default:
+		}
+		
+		// Send progress for checking phase
+		sendProgress(ProgressUpdate{
+			Stage:   "checking",
+			Current: idx + 1,
+			Total:   len(docs),
+			Message: fmt.Sprintf("Checking document: %s", doc.Title),
+			URI:     doc.URI,
+		})
+		
 		// Compute content hash
 		hash := computeDocumentHash(doc)
 		
@@ -277,8 +307,31 @@ func (i *indexImpl) AddDocumentBatch(docs []Document) (*BatchResult, error) {
 		return result, nil
 	}
 
+	// Send status update after checking phase
+	sendProgress(ProgressUpdate{
+		Stage:   "checking",
+		Current: len(docs),
+		Total:   len(docs),
+		Message: fmt.Sprintf("Found %d new, %d updated documents to process", result.NewDocuments, result.UpdatedDocuments),
+	})
+
 	// Phase 2: Process documents
-	for _, doc := range toProcess {
+	for idx, doc := range toProcess {
+		// Check for cancellation
+		select {
+		case <-ctx.Done():
+			return result, ctx.Err()
+		default:
+		}
+		
+		sendProgress(ProgressUpdate{
+			Stage:   "processing",
+			Current: idx + 1,
+			Total:   len(toProcess),
+			Message: fmt.Sprintf("Processing: %s", doc.Title),
+			URI:     doc.URI,
+		})
+		
 		slog.Debug("Processing document",
 			"uri", doc.URI,
 			"content_length", len(doc.Content),
@@ -306,6 +359,20 @@ func (i *indexImpl) AddDocumentBatch(docs []Document) (*BatchResult, error) {
 
 	// Phase 3: Save HNSW index if auto-save is enabled
 	if i.manager.config.AutoSave {
+		// Check for cancellation before saving
+		select {
+		case <-ctx.Done():
+			return result, ctx.Err()
+		default:
+		}
+		
+		sendProgress(ProgressUpdate{
+			Stage:   "saving",
+			Current: 1,
+			Total:   1,
+			Message: "Saving HNSW index...",
+		})
+		
 		slog.Debug("Saving HNSW index")
 		if err := i.hnswIndex.Save(); err != nil {
 			slog.Error("Failed to save HNSW index",
@@ -324,6 +391,14 @@ func (i *indexImpl) AddDocumentBatch(docs []Document) (*BatchResult, error) {
 		metadata.ChunkCount = result.ProcessedChunks
 		i.manager.storage.SetIndexMetadata(i.name, *metadata)
 	}
+
+	// Send completion message
+	sendProgress(ProgressUpdate{
+		Stage:   "complete",
+		Current: len(toProcess),
+		Total:   len(toProcess),
+		Message: fmt.Sprintf("Complete! Indexed %d documents with %d chunks", len(toProcess), result.ProcessedChunks),
+	})
 
 	slog.Info("Batch processing complete",
 		"index", i.name,

@@ -1,6 +1,7 @@
 package hnswindex
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -69,6 +70,15 @@ type BatchResult struct {
 	UnchangedDocuments int               `json:"unchanged_documents"`
 	ProcessedChunks    int               `json:"processed_chunks"`
 	FailedURIs         map[string]string `json:"failed_uris,omitempty"`
+}
+
+// ProgressUpdate represents a progress update during batch processing
+type ProgressUpdate struct {
+	Stage   string  `json:"stage"`   // "checking", "processing", "embedding", "saving"
+	Current int     `json:"current"` // Current item number
+	Total   int     `json:"total"`   // Total items
+	Message string  `json:"message"` // Human-readable message
+	URI     string  `json:"uri,omitempty"` // Optional: current document URI
 }
 
 // IndexStats represents statistics for an index
@@ -198,10 +208,12 @@ func (i *Index) Name() string {
 	return i.name
 }
 
-// AddDocumentBatch adds multiple documents to the index
-func (i *Index) AddDocumentBatch(docs []Document) (*BatchResult, error) {
+// AddDocumentBatch adds multiple documents to the index with context support
+// The progress channel can be nil if progress updates are not needed.
+// The context can be used to cancel long-running operations.
+func (i *Index) AddDocumentBatch(ctx context.Context, docs []Document, progress chan<- ProgressUpdate) (*BatchResult, error) {
 	if impl := i.getImpl(); impl != nil {
-		return impl.AddDocumentBatch(docs)
+		return impl.AddDocumentBatch(ctx, docs, progress)
 	}
 	return &BatchResult{
 		TotalDocuments: len(docs),

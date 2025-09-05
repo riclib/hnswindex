@@ -41,6 +41,19 @@ type BatchResult struct {
 }
 ```
 
+### ProgressUpdate
+Real-time progress updates during batch processing.
+
+```go
+type ProgressUpdate struct {
+    Stage   string // Processing stage: "checking", "processing", "saving", "complete"
+    Current int    // Current item number
+    Total   int    // Total items in this stage
+    Message string // Human-readable message
+    URI     string // Document URI (optional)
+}
+```
+
 ### IndexStats
 Statistics for an index.
 
@@ -173,14 +186,16 @@ func (i *Index) AddDocument(doc Document) error
 - `error`: Error if indexing fails
 
 ### AddDocumentBatch
-Adds multiple documents in batch.
+Adds multiple documents in batch with context support and optional progress updates.
 
 ```go
-func (i *Index) AddDocumentBatch(docs []Document) (*BatchResult, error)
+func (i *Index) AddDocumentBatch(ctx context.Context, docs []Document, progress chan<- ProgressUpdate) (*BatchResult, error)
 ```
 
 **Parameters:**
+- `ctx`: Context for cancellation and timeout support
 - `docs`: Slice of documents to add
+- `progress`: Optional channel for progress updates (pass nil to skip)
 
 **Returns:**
 - `*BatchResult`: Processing results
@@ -200,7 +215,19 @@ docs := []hnswindex.Document{
     },
 }
 
-result, err := index.AddDocumentBatch(docs)
+// Option 1: With progress updates
+progressChan := make(chan hnswindex.ProgressUpdate, 100)
+go func() {
+    for update := range progressChan {
+        fmt.Printf("[%d/%d] %s\n", update.Current, update.Total, update.Message)
+    }
+}()
+result, err := index.AddDocumentBatch(context.Background(), docs, progressChan)
+close(progressChan)
+
+// Option 2: Without progress updates
+result, err := index.AddDocumentBatch(context.Background(), docs, nil)
+
 if err != nil {
     log.Fatal(err)
 }
@@ -444,7 +471,7 @@ for i := 0; i < len(documents); i += batchSize {
         end = len(documents)
     }
     
-    result, err := index.AddDocumentBatch(documents[i:end])
+    result, err := index.AddDocumentBatch(context.Background(), documents[i:end], nil)
     if err != nil {
         log.Printf("Batch %d failed: %v", i/batchSize, err)
         continue

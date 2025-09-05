@@ -32,6 +32,7 @@ go get github.com/riclib/hnswindex
 package main
 
 import (
+    "context"
     "fmt"
     "github.com/riclib/hnswindex"
 )
@@ -68,7 +69,7 @@ func main() {
         },
     }
 
-    result, err := index.AddDocumentBatch(docs)
+    result, err := index.AddDocumentBatch(context.Background(), docs, nil)
     if err != nil {
         panic(err)
     }
@@ -145,7 +146,7 @@ type Config struct {
 
 ### Index
 
-- `AddDocumentBatch(docs []Document) (*BatchResult, error)`
+- `AddDocumentBatch(ctx context.Context, docs []Document, progress chan<- ProgressUpdate) (*BatchResult, error)`
 - `Search(query string, limit int) ([]SearchResult, error)`
 - `GetDocument(uri string) (*Document, error)`
 - `DeleteDocument(uri string) error`

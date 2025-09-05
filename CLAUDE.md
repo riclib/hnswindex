@@ -121,6 +121,38 @@ go build -o demo
 - Minimal Tailwind CSS
 - data-star for dynamic interactions
 
+## Recent Updates
+
+### Progress Updates Feature (Latest - UPDATED API)
+- `AddDocumentBatch` now accepts context for cancellation and optional progress channel
+- Developer provides the progress channel (can be nil to skip)
+- Context support enables timeout and cancellation of long operations
+- Real-time updates during document checking, processing, and saving
+- Non-blocking updates that check for context cancellation
+- Demo CLI shows progress with terminal control sequences
+
+Example usage:
+```go
+// Option 1: With progress tracking
+progress := make(chan hnswindex.ProgressUpdate, 100)
+go func() {
+    for update := range progress {
+        fmt.Printf("[%d/%d] %s: %s\n", 
+            update.Current, update.Total, update.Stage, update.Message)
+    }
+}()
+result, err := index.AddDocumentBatch(ctx, docs, progress)
+close(progress)
+
+// Option 2: Without progress (simpler)
+result, err := index.AddDocumentBatch(ctx, docs, nil)
+
+// Option 3: With cancellation
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+defer cancel()
+result, err := index.AddDocumentBatch(ctx, docs, nil)
+```
+
 ## Common Tasks
 
 ### Debug Issues

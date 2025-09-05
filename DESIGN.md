@@ -132,7 +132,7 @@ func (im *IndexManager) Close() error
 
 // Index methods
 func (i *Index) Name() string
-func (i *Index) AddDocumentBatch(docs []Document) (*BatchResult, error)
+func (i *Index) AddDocumentBatch(ctx context.Context, docs []Document, progress chan<- ProgressUpdate) (*BatchResult, error)
 func (i *Index) Search(query string, limit int) ([]SearchResult, error)
 func (i *Index) GetDocument(uri string) (*Document, error)
 func (i *Index) DeleteDocument(uri string) error
@@ -187,7 +187,7 @@ type Chunk struct {
 ### Batch Processing Logic
 
 ```go
-func (i *Index) AddDocumentBatch(docs []Document) (*BatchResult, error) {
+func (i *Index) AddDocumentBatch(ctx context.Context, docs []Document, progress chan<- ProgressUpdate) (*BatchResult, error) {
     result := &BatchResult{TotalDocuments: len(docs)}
     
     // Phase 1: Analyze what needs updating
@@ -351,7 +351,7 @@ docs := []hnswindex.Document{
     {URI: "doc2", Title: "Pricing Guide", Content: "..."},
 }
 
-result, err := salesIndex.AddDocumentBatch(docs)
+result, err := salesIndex.AddDocumentBatch(context.Background(), docs, nil)
 fmt.Printf("Processed: %d new, %d updated, %d unchanged\n", 
     result.NewDocuments, result.UpdatedDocuments, result.UnchangedDocuments)
 
@@ -402,7 +402,7 @@ func confluenceIndexCommand(indexName, space string, limit int) error {
     }
     
     // Process through library
-    result, err := index.AddDocumentBatch(docs)
+    result, err := index.AddDocumentBatch(context.Background(), docs, nil)
     if err != nil {
         return err
     }

@@ -1,6 +1,7 @@
 package hnswindex
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -91,7 +92,7 @@ func TestIntegration_DocumentProcessing(t *testing.T) {
 	}
 
 	// Process documents (this would normally generate embeddings)
-	result, err := index.AddDocumentBatch(docs)
+	result, err := index.AddDocumentBatch(context.Background(), docs, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, 2, result.TotalDocuments)
 	
@@ -248,7 +249,7 @@ func TestIntegration_BatchProcessingWithMock(t *testing.T) {
 	}
 
 	// Process batch
-	result, err := index.AddDocumentBatch(docs)
+	result, err := index.AddDocumentBatch(context.Background(), docs, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, 3, result.TotalDocuments)
@@ -258,7 +259,7 @@ func TestIntegration_BatchProcessingWithMock(t *testing.T) {
 	assert.Greater(t, result.ProcessedChunks, 3) // Should have multiple chunks
 
 	// Process same documents again - should detect no changes
-	result2, err := index.AddDocumentBatch(docs)
+	result2, err := index.AddDocumentBatch(context.Background(), docs, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, 3, result2.TotalDocuments)
@@ -269,7 +270,7 @@ func TestIntegration_BatchProcessingWithMock(t *testing.T) {
 
 	// Update one document
 	docs[1].Content = "Updated content for the second document"
-	result3, err := index.AddDocumentBatch(docs)
+	result3, err := index.AddDocumentBatch(context.Background(), docs, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, 3, result3.TotalDocuments)
@@ -300,7 +301,7 @@ func TestIntegration_SearchWithMock(t *testing.T) {
 		{URI: "doc3", Title: "JavaScript Guide", Content: "JavaScript is also dynamically typed"},
 	}
 
-	_, err = index.AddDocumentBatch(docs)
+	_, err = index.AddDocumentBatch(context.Background(), docs, nil)
 	require.NoError(t, err)
 
 	// Search (with mock embedder, results won't be semantic)
@@ -373,7 +374,7 @@ func TestIntegration_ReadMarkdownFiles(t *testing.T) {
 	require.NotEmpty(t, docs, "Should have found markdown files in testdata")
 
 	// Process the documents
-	result, err := index.AddDocumentBatch(docs)
+	result, err := index.AddDocumentBatch(context.Background(), docs, nil)
 	require.NoError(t, err)
 	
 	assert.Equal(t, len(docs), result.TotalDocuments)
