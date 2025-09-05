@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/riclib/hnswindex"
+	"github.com/riclib/hnswindex/pkg/confluence"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -56,6 +57,13 @@ var statsCmd = &cobra.Command{
 	RunE:  runStats,
 }
 
+var confluenceCmd = &cobra.Command{
+	Use:   "confluence",
+	Short: "Index Confluence space pages",
+	Long:  `Download and index all pages from a Confluence space or starting from a specific page.`,
+	RunE:  runConfluence,
+}
+
 func init() {
 	cobra.OnInitialize(initConfig)
 
@@ -78,11 +86,22 @@ func init() {
 	// Stats command flags
 	statsCmd.Flags().StringVarP(&indexName, "index", "i", "", "index name (empty for all)")
 
+	// Confluence command flags
+	confluenceCmd.Flags().StringP("space", "s", "", "Confluence space key (required)")
+	confluenceCmd.Flags().StringP("url", "u", "", "Confluence base URL (required)")
+	confluenceCmd.Flags().String("username", "", "Confluence username (or use CONFLUENCE_USERNAME env)")
+	confluenceCmd.Flags().String("token", "", "Confluence API token (or use CONFLUENCE_API_TOKEN env)")
+	confluenceCmd.Flags().StringVarP(&indexName, "index", "i", "confluence", "Index name")
+	confluenceCmd.Flags().String("root-page", "", "Optional: Start from specific page ID and its children")
+	confluenceCmd.MarkFlagRequired("space")
+	confluenceCmd.MarkFlagRequired("url")
+
 	// Add commands
 	rootCmd.AddCommand(indexCmd)
 	rootCmd.AddCommand(searchCmd)
 	rootCmd.AddCommand(listCmd)
 	rootCmd.AddCommand(statsCmd)
+	rootCmd.AddCommand(confluenceCmd)
 
 	// Bind flags to viper
 	viper.BindPFlag("data_path", rootCmd.PersistentFlags().Lookup("data"))
@@ -350,6 +369,111 @@ func showIndexStats(manager *hnswindex.IndexManager, name string) error {
 		fmt.Printf("  Size: %.2f MB\n", float64(stats.SizeBytes)/(1024*1024))
 	}
 
+	return nil
+}
+
+func runConfluence(cmd *cobra.Command, args []string) error {
+	spaceKey, _ := cmd.Flags().GetString("space")
+	baseURL, _ := cmd.Flags().GetString("url")
+	username, _ := cmd.Flags().GetString("username")
+	apiToken, _ := cmd.Flags().GetString("token")
+	rootPage, _ := cmd.Flags().GetString("root-page")
+	
+	// Get credentials from environment if not provided
+	if username == "" {
+		username = os.Getenv("CONFLUENCE_USERNAME")
+		if username == "" {
+			return fmt.Errorf("username required: provide via --username flag or CONFLUENCE_USERNAME environment variable")
+		}
+	}
+	if apiToken == "" {
+		apiToken = os.Getenv("CONFLUENCE_API_TOKEN")
+		if apiToken == "" {
+			return fmt.Errorf("API token required: provide via --token flag or CONFLUENCE_API_TOKEN environment variable")
+		}
+	}
+	
+	// Create downloader
+	fmt.Printf("Connecting to Confluence at %s...\n", baseURL)
+	downloader, err := confluence.NewConfluenceDownloader(baseURL, username, apiToken, spaceKey)
+	if err != nil {
+		return fmt.Errorf("failed to create Confluence downloader: %w", err)
+	}
+	
+	// Download pages
+	var documents []hnswindex.Document
+	if rootPage != "" {
+		fmt.Printf("Downloading page tree from page %s in space %s...\n", rootPage, spaceKey)
+		documents, err = downloader.DownloadPageTree(rootPage)
+	} else {
+		fmt.Printf("Downloading all pages from space %s...\n", spaceKey)
+		documents, err = downloader.DownloadSpace()
+	}
+	
+	if err != nil {
+		return fmt.Errorf("download failed: %w", err)
+	}
+	
+	if len(documents) == 0 {
+		fmt.Println("No pages found to index")
+		return nil
+	}
+	
+	fmt.Printf("Downloaded %d pages\n", len(documents))
+	
+	// Create index manager
+	config := hnswindex.NewConfig()
+	config.DataPath = viper.GetString("data_path")
+	config.OllamaURL = viper.GetString("ollama_url")
+	config.EmbedModel = viper.GetString("embed_model")
+	config.ChunkSize = viper.GetInt("chunk_size")
+	config.ChunkOverlap = viper.GetInt("chunk_overlap")
+	config.MaxWorkers = viper.GetInt("max_workers")
+	config.AutoSave = viper.GetBool("auto_save")
+	
+	manager, err := hnswindex.NewIndexManager(config)
+	if err != nil {
+		return fmt.Errorf("failed to create index manager: %w", err)
+	}
+	defer manager.Close()
+	
+	// Get or create index
+	index, err := manager.GetIndex(indexName)
+	if err != nil {
+		if verbose {
+			fmt.Printf("Creating new index: %s\n", indexName)
+		}
+		index, err = manager.CreateIndex(indexName)
+		if err != nil {
+			return fmt.Errorf("failed to create index: %w", err)
+		}
+	}
+	
+	// Index documents
+	fmt.Printf("Indexing %d documents into '%s'...\n", len(documents), indexName)
+	result, err := index.AddDocumentBatch(documents)
+	if err != nil {
+		return fmt.Errorf("failed to index documents: %w", err)
+	}
+	
+	// Print results
+	fmt.Printf("\nIndexing Results:\n")
+	fmt.Printf("  Total documents: %d\n", result.TotalDocuments)
+	fmt.Printf("  New documents: %d\n", result.NewDocuments)
+	fmt.Printf("  Updated documents: %d\n", result.UpdatedDocuments)
+	fmt.Printf("  Unchanged documents: %d\n", result.UnchangedDocuments)
+	fmt.Printf("  Processed chunks: %d\n", result.ProcessedChunks)
+	
+	if len(result.FailedURIs) > 0 {
+		fmt.Printf("\n  Failed documents:\n")
+		for uri, err := range result.FailedURIs {
+			fmt.Printf("    - %s: %s\n", uri, err)
+		}
+	}
+	
+	fmt.Printf("\nConfluence pages indexed successfully!\n")
+	fmt.Printf("Use './demo search --index %s \"your query\"' to search\n", indexName)
+	
 	return nil
 }
 
