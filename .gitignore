@@ -57,3 +57,7 @@ temp/
 # Test coverage
 coverage.txt
 coverage.html
+
+# Test scripts with credentials
+cmd/demo/test.sh
+test.sh
