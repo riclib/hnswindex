@@ -1,16 +1,17 @@
 package embedder
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"sync"
 	"time"
-
-	"github.com/ollama/ollama/api"
 )
 
 // Embedder interface for generating text embeddings
@@ -20,9 +21,22 @@ type Embedder interface {
 	Dimension() int
 }
 
-// OllamaEmbedder implements Embedder using Ollama
+// embedRequest represents the request to Ollama's embed API
+type embedRequest struct {
+	Model string `json:"model"`
+	Input any    `json:"input"`
+}
+
+// embedResponse represents the response from Ollama's embed API
+type embedResponse struct {
+	Model      string      `json:"model"`
+	Embeddings [][]float32 `json:"embeddings"`
+}
+
+// OllamaEmbedder implements Embedder using Ollama HTTP API
 type OllamaEmbedder struct {
-	client    *api.Client
+	baseURL   string
+	client    *http.Client
 	model     string
 	dimension int
 	mu        sync.RWMutex
@@ -37,16 +51,21 @@ func NewOllamaEmbedder(ollamaURL string, model string) (*OllamaEmbedder, error) 
 		return nil, errors.New("model cannot be empty")
 	}
 
-	parsedURL, err := url.Parse(ollamaURL)
+	// Validate URL
+	_, err := url.Parse(ollamaURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse Ollama URL: %w", err)
 	}
 
-	client := api.NewClient(parsedURL, http.DefaultClient)
+	// Create HTTP client with timeout
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+	}
 
 	embedder := &OllamaEmbedder{
-		client: client,
-		model:  model,
+		baseURL: ollamaURL,
+		client:  client,
+		model:   model,
 		// Default dimensions for known models
 		dimension: getDimensionForModel(model),
 	}
@@ -68,20 +87,53 @@ func (o *OllamaEmbedder) GenerateEmbedding(text string) ([]float32, error) {
 		"text_preview", textPreview,
 	)
 	
-	ctx := context.Background()
-	
-	req := &api.EmbedRequest{
+	// Create request
+	req := embedRequest{
 		Model: o.model,
 		Input: text,
 	}
-
-	resp, err := o.client.Embed(ctx, req)
+	
+	// Marshal request to JSON
+	reqBody, err := json.Marshal(req)
 	if err != nil {
-		slog.Error("Failed to generate embedding",
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+	
+	// Create HTTP request
+	httpReq, err := http.NewRequestWithContext(context.Background(), 
+		"POST", o.baseURL+"/api/embed", bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	
+	// Send request
+	httpResp, err := o.client.Do(httpReq)
+	if err != nil {
+		slog.Error("Failed to send embedding request",
 			"error", err,
 			"model", o.model,
 		)
-		return nil, fmt.Errorf("failed to generate embedding: %w", err)
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer httpResp.Body.Close()
+	
+	// Check status code
+	if httpResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(httpResp.Body)
+		slog.Error("Embedding request failed",
+			"status", httpResp.StatusCode,
+			"body", string(body),
+			"model", o.model,
+		)
+		return nil, fmt.Errorf("embedding request failed with status %d: %s", 
+			httpResp.StatusCode, string(body))
+	}
+	
+	// Decode response
+	var resp embedResponse
+	if err := json.NewDecoder(httpResp.Body).Decode(&resp); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
 	if len(resp.Embeddings) == 0 || len(resp.Embeddings[0]) == 0 {
