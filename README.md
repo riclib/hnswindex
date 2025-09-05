@@ -9,13 +9,14 @@ A Go package for semantic document indexing and retrieval using local embeddings
 - 🚀 **Efficient Batch Processing**: Smart change detection to process only new or modified documents
 - 🔧 **Local Embeddings**: Generate embeddings locally using Ollama (no external API dependencies)
 - 💾 **Persistent Storage**: Built on bbolt for reliable, embedded database storage
-- 🌐 **Web Interface**: Clean web UI for search and index management (demo application)
+- ⚡ **Progress Tracking**: Real-time progress updates during indexing operations
+- 🛑 **Cancellation Support**: Context-based cancellation and timeout support
 - 🔗 **Confluence Integration**: Index documents directly from Confluence spaces (demo application)
 
 ## Installation
 
 ```bash
-go get github.com/riclib/hnswindex
+go get github.com/riclib/hnswindex@v0.1.0
 ```
 
 ### Prerequisites
@@ -39,11 +40,12 @@ import (
 
 func main() {
     // Initialize the index manager
-    manager, err := hnswindex.NewIndexManager(hnswindex.Config{
-        DBPath:     "./indexes.db",
-        OllamaURL:  "http://localhost:11434",
-        EmbedModel: "nomic-embed-text",
-    })
+    config := hnswindex.NewConfig()
+    config.DataPath = "./hnswdata"
+    config.OllamaURL = "http://localhost:11434"
+    config.EmbedModel = "nomic-embed-text"
+    
+    manager, err := hnswindex.NewIndexManager(config)
     if err != nil {
         panic(err)
     }
@@ -69,12 +71,22 @@ func main() {
         },
     }
 
+    // Option 1: Without progress tracking
     result, err := index.AddDocumentBatch(context.Background(), docs, nil)
     if err != nil {
         panic(err)
     }
-
     fmt.Printf("Indexed %d new documents\n", result.NewDocuments)
+    
+    // Option 2: With progress tracking
+    progress := make(chan hnswindex.ProgressUpdate, 100)
+    go func() {
+        for update := range progress {
+            fmt.Printf("[%d/%d] %s\n", update.Current, update.Total, update.Message)
+        }
+    }()
+    result, err = index.AddDocumentBatch(context.Background(), docs, progress)
+    close(progress)
 
     // Search
     results, err := index.Search("concurrent programming", 5)
@@ -96,14 +108,20 @@ The repository includes a demo CLI application showcasing the library's capabili
 # Build the demo
 go build -o demo ./cmd/demo
 
-# Index local files
-./demo files --index "docs" --dir ./documents
+# Index local markdown files
+./demo index --dir ./documents --index myindex
+
+# Index Confluence space
+./demo confluence --space SPACENAME --url https://company.atlassian.net --index confluence
 
 # Search
-./demo search --index "docs" --query "your search query"
+./demo search --index myindex "your search query"
 
-# Run web interface
-./demo server --port 8080
+# Show index statistics
+./demo stats --index myindex
+
+# List all indexes
+./demo list
 ```
 
 ## Architecture
@@ -123,21 +141,65 @@ The system uses content hashing to detect document changes, ensuring that only n
 ## Configuration
 
 ```go
-type Config struct {
-    DBPath       string // Path to bbolt database file
-    IndexDir     string // Directory for HNSW files
-    OllamaURL    string // Ollama service URL (default: "http://localhost:11434")
-    EmbedModel   string // Embedding model name (default: "nomic-embed-text")
-    ChunkSize    int    // Document chunk size in tokens (default: 512)
-    ChunkOverlap int    // Overlap between chunks (default: 50)
-}
+config := hnswindex.NewConfig()  // Creates config with sensible defaults
+config.DataPath = "./hnswdata"   // Directory for storage
+config.OllamaURL = "http://localhost:11434"
+config.EmbedModel = "nomic-embed-text"
+config.ChunkSize = 512           // Token size for chunks
+config.ChunkOverlap = 50         // Overlap between chunks
+config.MaxWorkers = 8            // Concurrent processing workers
+config.AutoSave = true           // Auto-save after batch operations
+```
+
+## Context Support and Cancellation
+
+The library supports context-based cancellation and timeouts:
+
+```go
+// With timeout
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+defer cancel()
+result, err := index.AddDocumentBatch(ctx, docs, nil)
+
+// With manual cancellation
+ctx, cancel := context.WithCancel(context.Background())
+// Cancel from another goroutine or on user action
+go func() {
+    if userClickedCancel {
+        cancel()
+    }
+}()
+result, err := index.AddDocumentBatch(ctx, docs, nil)
+```
+
+## Progress Tracking
+
+Monitor indexing progress in real-time:
+
+```go
+progress := make(chan hnswindex.ProgressUpdate, 100)
+go func() {
+    for update := range progress {
+        // update.Stage: "checking", "processing", "saving", "complete"
+        // update.Current: current item number
+        // update.Total: total items
+        // update.Message: human-readable message
+        // update.URI: current document URI (optional)
+        
+        fmt.Printf("[%d/%d] %s: %s\n", 
+            update.Current, update.Total, update.Stage, update.Message)
+    }
+}()
+
+result, err := index.AddDocumentBatch(ctx, docs, progress)
+close(progress)
 ```
 
 ## API Reference
 
 ### IndexManager
 
-- `NewIndexManager(config Config) (*IndexManager, error)`
+- `NewIndexManager(config *Config) (*IndexManager, error)`
 - `GetIndex(name string) (*Index, error)`
 - `CreateIndex(name string) (*Index, error)`
 - `DeleteIndex(name string) error`
