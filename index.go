@@ -216,6 +216,11 @@ func (i *Index) getImpl() *indexImpl {
 
 // AddDocumentBatch implementation with full processing pipeline
 func (i *indexImpl) AddDocumentBatch(ctx context.Context, docs []Document, progress chan<- ProgressUpdate) (*BatchResult, error) {
+	return i.AddDocumentBatchWithOptions(ctx, docs, progress, AddOptions{})
+}
+
+// AddDocumentBatchWithOptions implementation with full processing pipeline and options
+func (i *indexImpl) AddDocumentBatchWithOptions(ctx context.Context, docs []Document, progress chan<- ProgressUpdate, options AddOptions) (*BatchResult, error) {
 	slog.Info("Starting batch document processing",
 		"index", i.name,
 		"document_count", len(docs),
@@ -267,30 +272,40 @@ func (i *indexImpl) AddDocumentBatch(ctx context.Context, docs []Document, progr
 			"hash", hash[:16],
 		)
 		
-		// Check if document has changed
-		existingHash, err := i.manager.storage.GetDocumentHash(i.name, doc.URI)
-		if err != nil {
-			// Document doesn't exist
-			slog.Debug("Document is new",
+		// Check if document has changed (unless force update is set)
+		if options.ForceUpdate {
+			// Force update requested, always process
+			slog.Debug("Force update requested, processing document",
 				"uri", doc.URI,
-			)
-			result.NewDocuments++
-			toProcess = append(toProcess, doc)
-		} else if existingHash != hash {
-			// Document has changed
-			slog.Debug("Document has changed",
-				"uri", doc.URI,
-				"old_hash", existingHash[:16],
-				"new_hash", hash[:16],
+				"title", doc.Title,
 			)
 			result.UpdatedDocuments++
 			toProcess = append(toProcess, doc)
 		} else {
-			// Document unchanged
-			slog.Debug("Document unchanged",
-				"uri", doc.URI,
-			)
-			result.UnchangedDocuments++
+			existingHash, err := i.manager.storage.GetDocumentHash(i.name, doc.URI)
+			if err != nil {
+				// Document doesn't exist
+				slog.Debug("Document is new",
+					"uri", doc.URI,
+				)
+				result.NewDocuments++
+				toProcess = append(toProcess, doc)
+			} else if existingHash != hash {
+				// Document has changed
+				slog.Debug("Document has changed",
+					"uri", doc.URI,
+					"old_hash", existingHash[:16],
+					"new_hash", hash[:16],
+				)
+				result.UpdatedDocuments++
+				toProcess = append(toProcess, doc)
+			} else {
+				// Document unchanged
+				slog.Debug("Document unchanged",
+					"uri", doc.URI,
+				)
+				result.UnchangedDocuments++
+			}
 		}
 	}
 
@@ -640,6 +655,11 @@ func (i *indexImpl) Clear() error {
 		i.manager.storage.DeleteChunksByDocument(i.name, uri)
 	}
 
+	// Clear all document hashes to force re-indexing
+	if err := i.manager.storage.ClearHashes(i.name); err != nil {
+		return fmt.Errorf("failed to clear document hashes: %w", err)
+	}
+
 	// Reset metadata
 	metadata := storage.IndexMetadata{
 		NextHNSWId:    1,
@@ -655,6 +675,7 @@ func (i *indexImpl) Clear() error {
 // computeDocumentHash computes a hash of document content
 func computeDocumentHash(doc Document) string {
 	h := sha256.New()
+	h.Write([]byte(doc.URI))      // Include URI in hash to detect URI changes
 	h.Write([]byte(doc.Title))
 	h.Write([]byte(doc.Content))
 	// Include relevant metadata in hash

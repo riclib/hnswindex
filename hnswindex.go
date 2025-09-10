@@ -90,6 +90,11 @@ type IndexStats struct {
 	SizeBytes     int64  `json:"size_bytes"`
 }
 
+// AddOptions configures document addition behavior
+type AddOptions struct {
+	ForceUpdate bool // Force reprocessing regardless of hash
+}
+
 // IndexManager manages multiple indexes
 type IndexManager struct {
 	config   *Config
@@ -212,8 +217,16 @@ func (i *Index) Name() string {
 // The progress channel can be nil if progress updates are not needed.
 // The context can be used to cancel long-running operations.
 func (i *Index) AddDocumentBatch(ctx context.Context, docs []Document, progress chan<- ProgressUpdate) (*BatchResult, error) {
+	return i.AddDocumentBatchWithOptions(ctx, docs, progress, AddOptions{})
+}
+
+// AddDocumentBatchWithOptions adds multiple documents to the index with context support and options
+// The progress channel can be nil if progress updates are not needed.
+// The context can be used to cancel long-running operations.
+// The options allow forcing reprocessing regardless of hash.
+func (i *Index) AddDocumentBatchWithOptions(ctx context.Context, docs []Document, progress chan<- ProgressUpdate, options AddOptions) (*BatchResult, error) {
 	if impl := i.getImpl(); impl != nil {
-		return impl.AddDocumentBatch(ctx, docs, progress)
+		return impl.AddDocumentBatchWithOptions(ctx, docs, progress, options)
 	}
 	return &BatchResult{
 		TotalDocuments: len(docs),

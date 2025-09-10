@@ -457,6 +457,27 @@ func (s *Storage) GetDocumentHash(indexName, uri string) (string, error) {
 	return hash, err
 }
 
+// ClearHashes removes all document hashes for an index
+func (s *Storage) ClearHashes(indexName string) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		hashBucket := tx.Bucket([]byte(fmt.Sprintf("%s_hashes", indexName)))
+		if hashBucket == nil {
+			// Bucket doesn't exist, nothing to clear
+			return nil
+		}
+		
+		// Delete all keys in the hash bucket
+		c := hashBucket.Cursor()
+		for k, _ := c.First(); k != nil; k, _ = c.Next() {
+			if err := hashBucket.Delete(k); err != nil {
+				return err
+			}
+		}
+		
+		return nil
+	})
+}
+
 // GetIndexMetadata retrieves metadata for an index
 func (s *Storage) GetIndexMetadata(indexName string) (*IndexMetadata, error) {
 	var metadata *IndexMetadata

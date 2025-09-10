@@ -123,6 +123,23 @@ go build -o demo
 
 ## Recent Updates
 
+### Document URI Change Detection & Force Update (2025-09-10)
+- **URI now included in document hash**: Document URIs are now part of the change detection hash, so URI changes will trigger re-indexing
+- **Force update option**: New `AddDocumentBatchWithOptions` method allows forcing reprocessing regardless of hash
+- **Clear() now removes hashes**: The `Clear()` method now also clears document hashes, ensuring all documents are re-indexed after clearing
+
+Example usage:
+```go
+// Force reprocessing of documents (useful after embedding model changes)
+options := hnswindex.AddOptions{
+    ForceUpdate: true,
+}
+result, err := index.AddDocumentBatchWithOptions(ctx, docs, nil, options)
+
+// Regular usage (backward compatible)
+result, err := index.AddDocumentBatch(ctx, docs, nil)
+```
+
 ### Progress Updates Feature (Latest - UPDATED API)
 - `AddDocumentBatch` now accepts context for cancellation and optional progress channel
 - Developer provides the progress channel (can be nil to skip)
@@ -151,6 +168,10 @@ result, err := index.AddDocumentBatch(ctx, docs, nil)
 ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 defer cancel()
 result, err := index.AddDocumentBatch(ctx, docs, nil)
+
+// Option 4: With force update and progress
+options := hnswindex.AddOptions{ForceUpdate: true}
+result, err := index.AddDocumentBatchWithOptions(ctx, docs, progress, options)
 ```
 
 ## Common Tasks
