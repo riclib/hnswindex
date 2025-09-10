@@ -202,6 +202,62 @@ func (im *indexManagerImpl) wrapperManager() *IndexManager {
 	return im.wrapper
 }
 
+// GetIndex retrieves an existing index
+func (im *indexManagerImpl) GetIndex(name string) (*Index, error) {
+	im.mu.RLock()
+	defer im.mu.RUnlock()
+	
+	_, exists := im.indexes[name]
+	if !exists {
+		return nil, fmt.Errorf("index '%s' not found", name)
+	}
+	
+	// Return wrapped Index
+	return &Index{
+		name:    name,
+		manager: im.wrapperManager(),
+	}, nil
+}
+
+// DeleteIndex deletes an index
+func (im *indexManagerImpl) DeleteIndex(name string) error {
+	im.mu.Lock()
+	defer im.mu.Unlock()
+	
+	impl, exists := im.indexes[name]
+	if !exists {
+		return fmt.Errorf("index '%s' not found", name)
+	}
+	
+	// Close HNSW index
+	if impl.hnswIndex != nil {
+		impl.hnswIndex.Close()
+	}
+	
+	// Delete from storage
+	if err := im.storage.DeleteIndex(name); err != nil {
+		return fmt.Errorf("failed to delete index from storage: %w", err)
+	}
+	
+	// Remove HNSW file
+	indexPath := filepath.Join(im.config.DataPath, "indexes", name, "index.hnsw")
+	os.Remove(indexPath)
+	
+	// Remove from memory
+	delete(im.indexes, name)
+	
+	return nil
+}
+
+// ListIndexes returns all index names
+func (im *indexManagerImpl) ListIndexes() ([]string, error) {
+	im.mu.RLock()
+	defer im.mu.RUnlock()
+	
+	// Get from storage to ensure we have the latest list
+	return im.storage.ListIndexes()
+}
+
 // Index implementation methods
 
 func (i *Index) getImpl() *indexImpl {

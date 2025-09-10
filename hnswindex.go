@@ -124,14 +124,11 @@ func NewIndexManager(config *Config) (*IndexManager, error) {
 
 // GetIndex retrieves an existing index
 func (im *IndexManager) GetIndex(name string) (*Index, error) {
-	im.mu.RLock()
-	defer im.mu.RUnlock()
-
-	index, exists := im.indexes[name]
-	if !exists {
-		return nil, fmt.Errorf("index '%s' not found", name)
+	if impl := im.getImpl(); impl != nil {
+		return impl.GetIndex(name)
 	}
-	return index, nil
+	
+	return nil, fmt.Errorf("implementation not available")
 }
 
 // CreateIndex creates a new index
@@ -145,37 +142,20 @@ func (im *IndexManager) CreateIndex(name string) (*Index, error) {
 
 // DeleteIndex deletes an index
 func (im *IndexManager) DeleteIndex(name string) error {
-	im.mu.Lock()
-	defer im.mu.Unlock()
-
-	if _, exists := im.indexes[name]; !exists {
-		return fmt.Errorf("index '%s' not found", name)
+	if impl := im.getImpl(); impl != nil {
+		return impl.DeleteIndex(name)
 	}
-
-	// Delete from database
-	err := im.db.Update(func(tx *bbolt.Tx) error {
-		bucket := tx.Bucket([]byte("_indexes"))
-		return bucket.Delete([]byte(name))
-	})
-	if err != nil {
-		return fmt.Errorf("failed to delete index: %w", err)
-	}
-
-	// Remove from memory
-	delete(im.indexes, name)
-	return nil
+	
+	return fmt.Errorf("implementation not available")
 }
 
 // ListIndexes returns a list of all index names
 func (im *IndexManager) ListIndexes() ([]string, error) {
-	im.mu.RLock()
-	defer im.mu.RUnlock()
-
-	var names []string
-	for name := range im.indexes {
-		names = append(names, name)
+	if impl := im.getImpl(); impl != nil {
+		return impl.ListIndexes()
 	}
-	return names, nil
+	
+	return nil, fmt.Errorf("implementation not available")
 }
 
 // Close closes the index manager and all resources
